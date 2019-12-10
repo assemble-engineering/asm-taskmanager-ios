@@ -1,7 +1,7 @@
 import XCTest
 
-import EventManagerTests
+import TaskManagerTests
 
 var tests = [XCTestCaseEntry]()
-tests += EventManagerTests.allTests()
+tests += TaskManagerTests.allTests()
 XCTMain(tests)
