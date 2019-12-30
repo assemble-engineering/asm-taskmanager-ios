@@ -1,78 +1,111 @@
 import Foundation
 
-class TaskManager {
-	static let shared = TaskManager()
+public class TaskManager {
+	public static let shared = TaskManager()
 	let taskStore = TaskStore()
 	var taskRunner: TaskRunner?
 	var executingTasks = false
-	
-	enum TaskManagerError: Error {
+	let queue = DispatchQueue(label: "TaskManager", qos: .userInitiated)
+
+	public enum TaskManagerError: Error {
 		case missingTaskRunner
 		case busyExecutingTasks
 	}
 	
-	func use(taskRunner: TaskRunner){
-		self.taskRunner = taskRunner
+	public func use(taskRunner: TaskRunner){
+		queue.async {
+			self.taskRunner = taskRunner
+		}
 	}
 	
-	func manage(task: Task){
-		self.taskStore.store(task)
+	public func manage(task: Task){
+		queue.async {
+			print("Storing task: \(task)")
+			self.taskStore.store(task)
+		}
 	}
 	
-	func executeTasks(completion: @escaping (Result<Bool, Error>) -> Void){
-		
-		guard let taskRunner = self.taskRunner else {
-			completion(.failure(TaskManagerError.missingTaskRunner))
-			return
+	public func clearStore(completion: ((Result<Int, Error>) -> Void)? = nil) {
+		queue.async {
+			let nItems = self.taskStore.taskIndex.count
+			self.taskStore.clear()
+			if let c = completion {
+				c(.success(nItems))
+			}
 		}
-		
-		if executingTasks {
-			completion(.failure(TaskManagerError.busyExecutingTasks))
-			return
+	}
+	
+	public var storeDescription: String {
+		get {
+			return "\(self.taskStore.taskIndex.count) items"
 		}
-		
-		executingTasks = true
-		let group = DispatchGroup()
-		let queue = DispatchQueue.global()
-		
-		taskStore.taskIndex.forEach { (key, task) in
-			group.enter()
-			queue.async(group: group) {
-				taskRunner.run(task: task){ result in
-					switch result {
-						case .success(_):
-							self.taskStore.remove(task) //because it should be done
-						case .failure(let error):
-							print ("Error: \(error)")
+	}
+	
+	public func executeTasks(completion: ((Result<Bool, Error>) -> Void)? = nil){
+		queue.async {
+
+			guard let taskRunner = self.taskRunner else {
+				completion?(.failure(TaskManagerError.missingTaskRunner))
+				return
+			}
+			
+			if (self.executingTasks){
+				print("Busy executing tasks, bailing from executeTasks")
+				completion?(.failure(TaskManagerError.busyExecutingTasks))
+				return
+			}
+			
+			self.executingTasks = true
+			let group = DispatchGroup()
+			
+			print("executeTasks enumerating \(self.taskStore.taskIndex.count) tasks")
+			self.taskStore.taskIndex.forEach { (key, task) in
+				group.enter()
+				self.queue.async(group: group) {
+					print("Executing task: \(task)")
+
+					taskRunner.run(task: task){ result in
+						self.queue.async {
+							switch result {
+								case .success(_):
+									print ("### Executing Task Success")
+									
+									self.taskStore.remove(task) //because it should be done
+								case .failure(let error):
+									print ("### Executing Task Error: \(error)")
+							}
+							group.leave()
+						}
 					}
-					completion(result)
-					group.leave()
+				}
+			}
+			
+//			let _ = group.wait(timeout: .now() + 10.0)
+			
+			group.notify(queue: self.queue){
+				self.queue.async {
+					self.executingTasks = false
+					completion?(.success(true))
 				}
 			}
 		}
-		
-		let _ = group.wait(timeout: .now() + 10.0)
-		
-		group.notify(queue: queue){
-			queue.async {
-				self.executingTasks = false
-				completion(.success(true))
-			}
-		}
-
 	}
 	
-
+	
 	// An task is an object that has an identifier and created date
-	struct Task: Codable {
+	public struct Task: Codable {
 		var identifier: String
 		var createdAt: Date
-		var context: Data
+		var contextData: Data
 		
-		init(context: Data){
+		public init<T: Encodable>(context: T){
 			identifier = UUID().uuidString
 			createdAt = Date()
-			self.context = context
+			self.contextData = try! JSONEncoder().encode(context) //TODO: handle throw
+		}
+		
+		public func context<T: Decodable>(as type: T.Type) -> T {
+			return try! JSONDecoder().decode(type, from: self.contextData) //TODO: handle throw
 		}
 
 		func encode () -> String {
@@ -87,8 +120,8 @@ class TaskManager {
 	class TaskStore {
 		var taskIndex = TaskIndex()
 
-		let cacheBaseDir = "com.asm.ASMContextManager/TaskStore/Tasks"
-		let cacheFilePath = "com.asm.ASMContextManager/TaskStore/TaskIndex.json"
+		let cacheBaseDir = "com.asm.ASMContextManager/TaskStore"
+		let cacheFileName = "TaskIndex.json"
 
 		init() {
 			self.loadIndex()
@@ -96,19 +129,21 @@ class TaskManager {
 		  
 		var baseUrl: URL {
 			get {
-				let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+				/**
+				Why we're using Library/Application Support/: "Remember that files in Documents/ and Application Support/ are backed up by default."
+				In theory, this implies tasks can persist even across re-installs if user has iCloud backups going on.
+				Why we're not using Library/Caches/: "Note that the system may delete the Caches/ directory to free up disk space, so your app must be able to re-create or download these files as needed."
+				Why're not using tmp/: "The system will periodically purge these files when your app is not running; therefore, you cannot rely on these files persisting after your app terminates."
+				*/
+				let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
 				return url!.appendingPathComponent("\(cacheBaseDir)")
 			}
 		}
 		
-		func cachePath() -> String? {
-			var cachePath: String? = nil
-			
-			if let docsBaseURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-				cachePath = docsBaseURL.appendingPathComponent(self.cacheFilePath).path
+		var indexUrl: URL {
+			get {
+				return baseUrl.appendingPathComponent(self.cacheFileName)
 			}
-			
-			return cachePath
 		}
 		
 		
@@ -130,7 +165,7 @@ class TaskManager {
 				let contentString = task.encode()
 				try contentString.write(to: fileUrl, atomically: true, encoding: String.Encoding.utf8)
 				
-				print("TaskStore saved \(task) to file \n\(fileUrl)")
+				print("TaskStore saved to file \n\(fileUrl)")
 				self.taskIndex[task.identifier] = task
 				self.saveIndex()
 			} catch {
@@ -143,38 +178,37 @@ class TaskManager {
 			let fileUrl = self.url(forTask: task)
 			print("Removing \(fileUrl)")
 			self.taskIndex.removeValue(forKey: task.identifier)
-			try! FileManager.default.removeItem(at: fileUrl)
+			do {
+				try FileManager.default.removeItem(at: fileUrl)
+				self.saveIndex()
+			} catch (let error) {
+				print("Failed to remove file: \(fileUrl), ignoring error \(error)")
+			}
 		}
 		
 		func loadIndex() {
 			do {
-				if let cachePath = cachePath() {
-					let url = URL(fileURLWithPath: cachePath)
-					let d = try Data(contentsOf:url)
+				let url = indexUrl
+				//if url is nil, file doesn't exist
+				let d = try Data(contentsOf:url)
 					
-					let decoder = JSONDecoder()
-					self.taskIndex = try decoder.decode(TaskIndex.self, from: d)
-				}
-				else {
-					print("Failed to unarchive task index")
-				}
+				let decoder = JSONDecoder()
+				self.taskIndex = try decoder.decode(TaskIndex.self, from: d)
+				print("Loaded \(self.taskIndex.count) tasks")
 			} catch {
-				print("Failed to decode task index")
+				print("Failed to decode task index, index file probably doesn't exist yet")
 			}
 		}
 		
 		func saveIndex(){
 			do {
-				if let cachePath = cachePath() {
-					let url = URL(fileURLWithPath: cachePath)
+				let url = indexUrl
 					
-					let encoder = JSONEncoder()
-					let d = try encoder.encode(self.taskIndex)
-					try d.write(to: url)
-					print("Saved cache index \(url)")
-				} else {
-					print("Failed to encode index")
-				}
+				let encoder = JSONEncoder()
+				let d = try encoder.encode(self.taskIndex)
+				try d.write(to: url)
+				print("Saved \(self.taskIndex.count) tasks to cache \(url)")
+				
 			} catch {
 				print("Failed to save index")
 			}
@@ -186,12 +220,11 @@ class TaskManager {
 				catch { print("Failed to delete \(self.baseUrl.path), maybe it didn't exist yet?") }
 			}
 			self.taskIndex.removeAll()
+			self.saveIndex()
 		}
 	}
 }
 
-
-protocol TaskRunner {
-	func run(task: TaskManager.Task, completion: @escaping (Result<Bool, Error>) -> Void)
+public protocol TaskRunner {
+	func run(task: TaskManager.Task, completion: @escaping (Swift.Result<Bool, Error>) -> Void)
 }
-
