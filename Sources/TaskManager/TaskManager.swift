@@ -30,6 +30,8 @@ public class TaskManager {
 		queue.async {
 			let nItems = self.taskStore.taskIndex.count
 			self.taskStore.clear()
+			NotificationCenter.default.post(Notification(name: .didUpdateTaskStore))
+
 			if let c = completion {
 				c(.success(nItems))
 			}
