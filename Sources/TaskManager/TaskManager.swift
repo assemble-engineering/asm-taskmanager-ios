@@ -239,7 +239,7 @@ public protocol TaskRunner {
 }
 
 extension Notification.Name {
-    static let didUpdateTaskStore = Notification.Name("didUpdateTaskStore")
+	public static let didUpdateTaskStore = Notification.Name("didUpdateTaskStore")
 }
 
 
