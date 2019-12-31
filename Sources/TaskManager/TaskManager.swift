@@ -2,11 +2,12 @@ import Foundation
 
 public class TaskManager {
 	public static let shared = TaskManager()
+	var delegate: TaskManagerDelegate?
 	let taskStore = TaskStore()
 	var taskRunner: TaskRunner?
 	var executingTasks = false
 	let queue = DispatchQueue(label: "TaskManager", qos: .userInitiated)
-
+	
 	public enum TaskManagerError: Error {
 		case missingTaskRunner
 		case busyExecutingTasks
@@ -22,6 +23,7 @@ public class TaskManager {
 		queue.async {
 			print("Storing task: \(task)")
 			self.taskStore.store(task)
+			self.delegate?.taskStoreChanged(taskManager: self)
 		}
 	}
 	
@@ -38,6 +40,12 @@ public class TaskManager {
 	public var storeDescription: String {
 		get {
 			return "\(self.taskStore.taskIndex.count) items"
+		}
+	}
+	
+	public var numberOfStoredItems: Int {
+		get {
+			return self.taskStore.taskIndex.count
 		}
 	}
 	
@@ -71,6 +79,8 @@ public class TaskManager {
 									print ("### Executing Task Success")
 									
 									self.taskStore.remove(task) //because it should be done
+									self.delegate?.taskStoreChanged(taskManager: self)
+
 								case .failure(let error):
 									print ("### Executing Task Error: \(error)")
 							}
@@ -225,6 +235,12 @@ public class TaskManager {
 	}
 }
 
+public protocol TaskManagerDelegate {
+	func taskStoreChanged(taskManager: TaskManager)
+}
+
 public protocol TaskRunner {
 	func run(task: TaskManager.Task, completion: @escaping (Swift.Result<Bool, Error>) -> Void)
 }
+
+
