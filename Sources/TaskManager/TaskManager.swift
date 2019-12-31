@@ -2,7 +2,7 @@ import Foundation
 
 public class TaskManager {
 	public static let shared = TaskManager()
-	var delegate: TaskManagerDelegate?
+	public var delegate: TaskManagerDelegate?
 	let taskStore = TaskStore()
 	var taskRunner: TaskRunner?
 	var executingTasks = false
