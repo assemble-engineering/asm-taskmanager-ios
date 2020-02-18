@@ -5,9 +5,9 @@ final class TaskManagerTests: XCTestCase {
     func testManagement() {
 //		TaskManager.shared.clearStore()
 
-		TaskManager.shared.use(taskRunner: TestTaskRunner())
+		TaskManager.shared.register(taskRunner: TestTaskRunner(), taskType: "TestActionType")
 		let customAction = TestAction()
-		let task = TaskManager.Task(context: customAction)
+		let task = TaskManager.Task(context: customAction, taskType: "TestActionType")
 //		let c2 = TestAction.decode(from: context)
 		
 		TaskManager.shared.manage(task: task)

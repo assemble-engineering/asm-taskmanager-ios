@@ -3,18 +3,23 @@ import Foundation
 public class TaskManager {
 	public static let shared = TaskManager()
 	let taskStore = TaskStore()
-	var taskRunner: TaskRunner?
+	var taskRunners: [String: TaskRunner]?
 	var executingTasks = false
 	let queue = DispatchQueue(label: "TaskManager", qos: .userInitiated)
 	
 	public enum TaskManagerError: Error {
+		case missingTaskRunners
 		case missingTaskRunner
 		case busyExecutingTasks
 	}
 	
-	public func use(taskRunner: TaskRunner){
+	public func register(taskRunner: TaskRunner, taskType: String){
 		queue.async {
-			self.taskRunner = taskRunner
+			if var taskRunners = self.taskRunners {
+				taskRunners[taskType] = taskRunner;
+			} else {
+				self.taskRunners = [taskType: taskRunner];
+			}
 		}
 	}
 	
@@ -51,13 +56,13 @@ public class TaskManager {
 	}
 	
 	public func executeTasks(completion: ((Result<Bool, Error>) -> Void)? = nil){
+		guard let taskRunners = self.taskRunners else {
+			print("### Error: no task runners exist")
+			completion?(.failure(TaskManagerError.missingTaskRunners))
+			return
+		}
+		
 		queue.async {
-
-			guard let taskRunner = self.taskRunner else {
-				completion?(.failure(TaskManagerError.missingTaskRunner))
-				return
-			}
-			
 			if (self.executingTasks){
 				print("Busy executing tasks, bailing from executeTasks")
 				completion?(.failure(TaskManagerError.busyExecutingTasks))
@@ -69,6 +74,13 @@ public class TaskManager {
 			
 			print("executeTasks enumerating \(self.taskStore.taskIndex.count) tasks")
 			self.taskStore.taskIndex.forEach { (key, task) in
+				
+				guard let taskRunner = taskRunners[task.taskType] else {
+					print("### Error: no task runner for task.type \(task.taskType)")
+					completion?(.failure(TaskManagerError.missingTaskRunner))
+					return
+				}
+				
 				group.enter()
 				self.queue.async(group: group) {
 					print("Executing task: \(task)")
@@ -91,8 +103,6 @@ public class TaskManager {
 				}
 			}
 			
-//			let _ = group.wait(timeout: .now() + 10.0)
-			
 			group.notify(queue: self.queue){
 				self.queue.async {
 					self.executingTasks = false
@@ -108,10 +118,12 @@ public class TaskManager {
 		var identifier: String
 		var createdAt: Date
 		var contextData: Data
+		var taskType: String
 		
-		public init<T: Encodable>(context: T){
+		public init<T: Encodable>(context: T, taskType: String){
 			identifier = UUID().uuidString
 			createdAt = Date()
+			self.taskType = taskType;
 			self.contextData = try! JSONEncoder().encode(context) //TODO: handle throw
 		}
 		
